@@ -1,12 +1,11 @@
 body {
-  background-color: lightblue;
+  background-color: yellow;
   color: rgb(red, green, blue);
 }
 
 h1 {
   color: white;
   text-align: center;
-  text-decoration: none;
 }
 
 p {
