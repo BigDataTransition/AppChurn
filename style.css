@@ -1,6 +1,25 @@
 body {
-  background-color: yellow;
+  min-height: 100vh;
+  background-color: salmon;
   color: rgb(red, green, blue);
+}
+nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 40px 20px;
+}
+
+nav ul {
+  display: flex;
+  width: 50%;
+  justify-content: space-around;
+}
+
+.header {
+  display: flex;
+  justify-content: space-around;
+  margin: 30px auto;
 }
 
 h1 {
