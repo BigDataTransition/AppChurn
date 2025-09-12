@@ -1,0 +1,215 @@
+pipeline{
+    agen any
+
+    options {
+        skipDefaultCheckout(true)
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    environment {
+        ENVIRONMENT = "${env.BRANCH_NAME == 'main' ? 'PROD' : env.BRANCH_NAME == 'develop': env.BRANCH_NAME == 'stage-in' ? env.BRANCH_NAME == 'yenPMD'}"
+        LOCAL_REPO_PATH = "Users\\philippemonsan\\Documents\\Project\\DevOps\\stagelenaick"
+        DEPLOY_DIR = "Users\\philippemonsan\\Documents\\Project\\DevOps\\${env.BRANCH_NAME}_deploy"
+        SMTP_SERVER = 'smtp.gmail.com'
+        SMTP_PORT = '465'
+        SMPTP_CREDENTIALS_ID = 'smtp-gmail-ryenon'
+        NOTIFICATION_EMAIL = 'ryenon@gmail.com'
+    }
+
+    stages {
+        stage ('Initialisation') {
+            steps {
+                script {
+                    echo "Demarrage du pipeline pour ${env.BRANCH_NAME}"
+                    echo "Environnement détecté: ${ENVIRONMENT}"
+
+                    // Création du repertoire de deploiement
+                    sh """
+                        if not exist "${DEPLOY_DIR}" (
+                            mkdir "${DEPLOY_DIR}"
+                            echo Répertoire crée: ${DEPLOY_DIR}
+                        ) else (
+                            echo Répertoire existe déja: ${DEPLOY_DIR}
+                        )
+                        ls "${DEPLOY_DIR}"
+                        """
+                }
+            }
+        }
+
+        stage('Configuration Git') {
+            steps {
+                script {
+                    sh """
+                        cd "${LOCAL_REPO_PATH}"
+                        REM Initialisation si necessaire
+                        if not exist ".git" (
+                            git init
+                            git config --local --add safe.directory *
+                            git checkout -b ${env.BRANCH_NAME}
+                            git add .
+                            git commit -m "Intial commit"
+                        )
+
+                        REM Synchronisation 
+                        git remote remove origin 2>nul
+                        git remote add origin "file:///${LOCAL_REPO_PATH}"
+                        git fetch --force origin
+                        git reset --hard origin/${env.BRANCH_NAME}
+                        git clean -fd
+                    """
+                }
+            }
+        }
+
+        stage('Tests') {
+            when {
+                expression {
+                    return env.BRANCH_NAME != 'yenPMD'
+                }
+            }
+            steps {
+                script {
+                    // Tests
+                    sh """
+                        echo "Exécution des tests pour ${env.BRANCH_NAme}..."
+                        echo "Tests reussis" > test-results.log
+                    """
+                    // Rapport JUnit
+                    writeFile file: 'test-results.xml', test: """<?xml version="1.0" encoding="UTF-8"?>
+        <testsuites>
+            <testsuite name="BasicTests" tests="1" failure="0">
+                <testcase name="SanityCheck" classname="QuickTest"/>
+            </testsuite>
+        </testsuites> 
+                    """
+                    junit 'test-results.xml'
+
+
+                }
+            }
+        } 
+
+        stage('Validation Manuelle') {
+            when {
+                expression {
+                    return env.BRANCH_NAME == 'develop' || env.BRANCH_NAME == 'stage-in' || env.BRANCH_NAME == 'main'
+                }
+            } 
+            steps {
+                script {
+                    // Validation avec suivi
+                    def approver = input(
+                        message: "Valider le deploiement en ${ENVIRONMENT}?",
+                        ok: "Deployer",
+                        submitter: "admin",
+                        parameters: [
+                            text(
+                                name: 'comment',
+                                description: 'Commentaire (optionnel)'
+                            )
+                        ]
+                    )
+                    env.APPROVER = approver.toString()
+                    echo "Validé par: ${env.APPROVER}"
+                }
+            }
+        }
+
+        stage('Deploiement') {
+            steps {
+                script {
+                    // Deploiement
+                    sh """
+                        echo "Déploiement vers ${DEPLOY_DIR}..."
+                        robocopy "${LOCAL_REPO_PATH}" "${DEPLOY_DIR}" /MIR /NJH /NDL /NC /NS
+                        echo "Déployé dans ${DEPLOY_DIR}"
+                        ls "${DEPLOY_DIR}"
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                // Rapport de deploiement
+                def reportContent = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Papport ${env.BRANCH_NAME}</title>
+                    <style>
+                        body { font-family: Arial; margin: 20px; }
+                        .success {color: #2ecc71; }
+                        .failure {color: #e74c3c; }
+                        .card {
+                            border: 1ps solid #ddd;
+                            border-radius: 5px;
+                            padding: 20px;
+                            margin: 10px 0;
+                            background: #f9f9f9
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="card">
+                        <h1>Rapport ${env.BRANCH_NAME}</h1>
+                        <p>Environmet: <strong>${ENVIRONMENT}</strong></p>
+                        <p>Statut: <span class="${currentBuild.currentResult == 'SUCCESS' ? 'success': 'failure'}">${currentBuild.currentResult}</span></p>
+                        ${env.APPROVER ? "<p>Validé par: ${env.APPROVER}<p>": ""}
+                    </div>
+                </body>
+                </html>
+                """
+                writeFile file: 'deployment-report.html', text: reportContent
+                publishHTML target: [
+                    allowMissing: false,
+                    alwaysLinkToLastBuild: true,
+                    reportDir: '.',
+                    reportFiles: 'deployment-report.html',
+                    reportName: 'Rapport de deploiement'
+                ]
+            }
+        }
+
+        success {
+            emailest (
+                subject: "SUCCES - ${env.JOB_NAME} [${env.BUILD_NUMBER}]",
+                body: """
+                <h2 style="color: #2ecc71;">Déploiement reussi</h2>
+                <div style="background: #f5f5f5; padding: 15px; border-radius: 5px;">
+                    <p><strong>Branche: </strong>${env.BRANCH_NAME}</p>
+                    <p><strong>Environment: </strong>${ENVIRONMENT}</p>
+                    ${env.APPROVER ? "<p><strong>Validé par: </strong>${env.APPROVER}" : ""}
+                    <p><a href="${env.BUILD_URL}">Voir les details</a></p>
+                </div>
+                """,
+                to: "${env.NOTIFICATION_EMAIL}",
+                mimeType: 'text/html'
+            )
+        }
+
+        failure {
+            emailest (
+                subject: "ECHEC - ${env.JOB_NAME} [${env.BUILD_NUMBER}]",
+                body: """
+                <h2 style="color: #e74c3c;">Echec du déploiement</h2>
+                <div style="background: #f5f5f5; padding: 15px; border-radius: 5px;">
+                    <p><strong>Branche: </strong>${env.BRANCH_NAME}</p>
+                    <p><strong>Environment: </strong>${ENVIRONMENT}</p>
+                    <p><strong>Erreur: </strong>${currentBuild.currentResult}</p>
+                    <p><a href="${env.BUILD_URL}">Voir les details</a></p>
+                </div>
+                """,
+                to: "${env.NOTIFICATION_EMAIL}",
+                mimeType: 'text/html'
+
+            )
+        }
+    }
+
+
+}
